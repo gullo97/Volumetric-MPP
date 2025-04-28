@@ -1,224 +1,206 @@
 <!DOCTYPE html>
-<html lang='en'>
+<html lang="en">
 <head>
-  <meta charset='UTF-8'>
-  <title>Volumetric-Persistence Peak-Detection Playground</title>
-
-  <!-- PyScript -->
-  <link rel='stylesheet' href='https://pyscript.net/latest/pyscript.css'>
-  <script defer src='https://pyscript.net/latest/pyscript.js'></script>
-
+  <meta charset="UTF-8">
+  <title>Volumetric Persistence Playground</title>
   <style>
-    body{font-family:system-ui,sans-serif;margin:0;padding:0 1rem;max-width:1200px}
-    header{padding:1.2rem 0}
-    .controls{display:flex;flex-wrap:wrap;gap:1.4rem;margin-bottom:1.2rem}
-    input[type=range]{width:200px}
-    .plot{margin:1.5rem 0}
-    .plot h2{margin:.4rem 0}
+    body { font-family: sans-serif; max-width: 960px; margin: auto; padding: 1rem; }
+    .controls { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
+    .controls label { display: flex; flex-direction: column; font-size: 0.9rem; }
+    .controls input, .controls select { margin-top: 0.3rem; }
+    .plot { margin-top: 1.5rem; }
+    .plot img { width: 100%; border: 1px solid #ccc; }
   </style>
 </head>
 <body>
 
-<header>
   <h1>Volumetric-Persistence Peak-Detection Playground</h1>
-  <p>Create synthetic spectra, tweak noise &amp; peak-count, and reproduce all
-     figures from the paper – right in your browser.</p>
-</header>
+  <p>Tweak the number of peaks, noise amount/type, and click “Run”. All plots update.</p>
 
-<section class='controls'>
-  <label>Number&nbsp;of&nbsp;peaks 
-    <input type='range' id='num_peaks' min='1' max='6' step='1' value='3'
-           oninput='num_peaks_val.textContent=this.value'>
-    <span id='num_peaks_val'>3</span>
-  </label>
+  <div class="controls">
+    <label>
+      # of peaks
+      <input type="number" id="num_peaks" min="1" max="6" value="3">
+    </label>
+    <label>
+      Noise level
+      <input type="range" id="noise_level" min="0" max="0.2" step="0.005" value="0.05">
+      <span id="noise_val">0.05</span>
+    </label>
+    <label>
+      Noise type
+      <select id="noise_type">
+        <option value="gaussian" selected>Gaussian</option>
+        <option value="uniform">Uniform</option>
+      </select>
+    </label>
+    <button id="run">Run</button>
+  </div>
 
-  <label>Noise&nbsp;σ/amp&nbsp;
-    <input type='range' id='noise_level' min='0' max='0.2' step='0.005' value='0.05'
-           oninput='noise_val.textContent=this.value'>
-    <span id='noise_val'>0.05</span>
-  </label>
+  <div class="plot">
+    <h3>Spectrum + Detected Peaks</h3>
+    <img id="spec_img" alt="Spectrum">
+  </div>
+  <div class="plot">
+    <h3>Volumetric-Persistence Barcode</h3>
+    <img id="barcode_img" alt="Barcode">
+  </div>
+  <div class="plot">
+    <h3>Inner-Grid (First Peak)</h3>
+    <img id="inner_img" alt="Inner grid">
+  </div>
+  <div class="plot">
+    <h3>Multi-Peak Persistence Radar</h3>
+    <img id="radar_img" alt="Radar chart">
+  </div>
 
-  <label>Noise&nbsp;type 
-    <select id='noise_type'>
-      <option value='gaussian' selected>Gaussian</option>
-      <option value='uniform'>Uniform</option>
-    </select>
-  </label>
-
-  <button id='run-btn' py-click='run_pipeline'>Generate & Detect Peaks</button>
-</section>
-
-<div class='plot'><h2>Spectrum + Detected Peaks</h2><div id='spectrum_plot'></div></div>
-<div class='plot'><h2>Volumetric-Persistence Barcode</h2><div id='barcode_plot'></div></div>
-<div class='plot'><h2>Inner-Grid (1<sup>st</sup> peak)</h2><div id='inner_grid_plot'></div></div>
-<div class='plot'><h2>Multi-Peak Persistence Radar</h2><div id='radar_plot'></div></div>
-
-<!-- PyScript runtime needs the packages you import -->
-<py-env>
-- numpy
-- scipy            # provides scipy.signal.find_peaks
-- matplotlib
-</py-env>
-
-<py-script>
+  <!-- Pyodide loader -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
+  <script>
+    (function() {
+      const pyodideReadyPromise = loadPyodide({
+        indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/'
+      }).then(async pyodide => {
+        await pyodide.loadPackage(['numpy','scipy','matplotlib']);
+        await pyodide.runPythonAsync(`
 import numpy as np
 import matplotlib
-matplotlib.use("module://matplotlib_inline.backend_inline")
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
-from pyscript import display, document
+from io import BytesIO
+import base64
 
-# ────────────────────────────────────────────────────────────────────────────────
-#  ⭐  Core helpers   (condensed from your  core.py)
-# ────────────────────────────────────────────────────────────────────────────────
-def smooth_ma(spec, w):
-    return spec if w < 2 else np.convolve(spec, np.ones(w)/w, 'same')
+def synthetic(n_peaks, noise_lvl, noise_type):
+    x = np.linspace(0, 1000, 1000)
+    rng = np.random.default_rng(42)
+    centers = np.linspace(200, 800, n_peaks)
+    spectrum = sum(np.exp(-((x-c)/10)**2) for c in centers)
+    if noise_lvl > 0:
+        if noise_type=='gaussian':
+            spectrum += noise_lvl * rng.standard_normal(x.shape)
+        else:
+            spectrum += rng.uniform(-noise_lvl, noise_lvl, x.shape)
+    return x, spectrum
 
-def aggregate(spec, k):
-    if k <= 1:                     # identity
-        return spec, lambda i: i
-    trim = len(spec) % k
-    if trim: spec = spec[:-trim]
-    agg = spec.reshape(-1, k).mean(1)
-    return agg, lambda i: int(round(i*k + k/2))
-
-def volumetric_peaks(spec, smooth_range, bin_range,
-                     thr_range, wid_range, prom_range, dist_range,
-                     merging=5, tol=1, top_k=None):
-
+def find_volumetric_peaks(spectrum):
+    smoothing_range = [0,3,5]
+    bins_range = [1,2]
+    threshold_range = np.linspace(0,0.15,10)
+    width_range = np.linspace(1,50,10)
+    prominence_range = np.linspace(0.01,1.0,10)
+    distance_range = [1,5,10,15,20]
+    merging = 10
     cell_vol = 1.0
     candidates = {}
-
-    for s in smooth_range:
-      for b in bin_range:
-        pre = smooth_ma(spec, s)
-        proc, map_fn = aggregate(pre, b)
-        for thr in thr_range:
-          for wid in wid_range:
-            for prom in prom_range:
-              for dist in dist_range:
-                params = dict(smoothing=s, bins_factor=b,
-                              threshold=thr, width=wid,
-                              prominence=prom, distance=dist)
-                pks,_ = find_peaks(proc, threshold=thr, width=wid,
-                                   prominence=prom, distance=dist)
-                for p in pks:
-                  key = (s,b,p)
-                  for ek in list(candidates):
-                    if ek[:2]==key[:2] and abs(p-ek[2])<=tol:
-                      c=candidates[ek]; c['grid']+=1; c['params'].append(params)
-                      break
-                  else:
-                      candidates[key]=dict(grid=1,params=[params],
-                                           outer=(s,b),agg=p,map_fn=map_fn)
-
-    merged=[]
+    for s in smoothing_range:
+        spec_s = spectrum if s<2 else np.convolve(spectrum, np.ones(s)/s, 'same')
+        for b in bins_range:
+            if b>1:
+                trim = len(spec_s) % b
+                spec_b = spec_s[:-trim] if trim else spec_s
+                proc = spec_b.reshape(-1,b).mean(1)
+                map_fn = lambda i, b=b: int(round(i*b + b/2))
+            else:
+                proc = spec_s
+                map_fn = lambda i: i
+            for thr in threshold_range:
+                for wid in width_range:
+                    for prom in prominence_range:
+                        for dist in distance_range:
+                            peaks, _ = find_peaks(proc, threshold=thr, width=wid, prominence=prom, distance=dist)
+                            for p in peaks:
+                                key = (s,b,p)
+                                if key not in candidates:
+                                    candidates[key] = {'count':0,'agg':p,'map_fn':map_fn,'params':[]}
+                                candidates[key]['count'] += 1
+                                candidates[key]['params'].append({'s':s,'b':b,'thr':thr,'wid':wid,'prom':prom,'dist':dist})
+    merged = []
     for c in candidates.values():
-      pi=c['map_fn'](c['agg'])
-      for m in merged:
-        if abs(pi-m['idx'])<=merging:
-          tot=m['pers']+c['grid']*cell_vol
-          m['idx']=int(round((m['idx']*m['pers']+pi*c['grid']*cell_vol)/tot))
-          m['pers']=tot
-          m['params']+=c['params']
-          break
-      else:
-        merged.append(dict(idx=pi,pers=c['grid']*cell_vol,params=c['params']))
-    merged.sort(key=lambda x:-x['pers'])
-    return merged[:top_k] if top_k else merged
-# ────────────────────────────────────────────────────────────────────────────────
-#  ⭐  Plot helpers   (trimmed from utils.py for browser use)
-# ────────────────────────────────────────────────────────────────────────────────
-C = {'spec':'#8499C4',
-     'pk':['#C94040','#69995D','#CBAC88','#394648']}
+        orig = c['map_fn'](c['agg'])
+        pers = c['count']*cell_vol
+        added = False
+        for m in merged:
+            if abs(orig - m['idx']) <= merging:
+                total = m['pers'] + pers
+                m['idx'] = int(round((m['idx']*m['pers'] + orig*pers)/total))
+                m['pers'] += pers
+                m['params'] += c['params']
+                added = True
+                break
+        if not added:
+            merged.append({'idx':orig,'pers':pers,'params':c['params']})
+    merged.sort(key=lambda x: -x['pers'])
+    return merged[:30]
 
-def fig_to(div):                    # thin wrapper
-    display(plt.gcf(),target=div); plt.close()
+def plot_and_encode(fig):
+    buf = BytesIO()
+    fig.tight_layout()
+    fig.savefig(buf, format='png')
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode('ascii')
 
-def plot_spec(x,y,peaks,div,top=4):
-    plt.figure(figsize=(6,2.5))
-    plt.plot(x,y,c=C['spec'],lw=1)
-    for r,p in enumerate(peaks[:top],1):
-      plt.axvline(p['idx'],c=C['pk'][(r-1)%4],ls='--',lw=2,alpha=.9)
-    plt.xlabel('Channel'); plt.ylabel('Intensity'); plt.grid(alpha=.4)
-    plt.tight_layout(); fig_to(div)
+def generate_and_plots(n_p, noise_lvl, noise_type):
+    x, y = synthetic(n_p, noise_lvl, noise_type)
+    peaks = find_volumetric_peaks(y)
+    # Plot 1
+    fig1, ax1 = plt.subplots(figsize=(8,2.5))
+    ax1.plot(x, y, color='#8499C4', lw=1)
+    for i, pk in enumerate(peaks[:4]): ax1.axvline(pk['idx'], color=['#C94040','#69995D','#CBAC88','#394648'][i], linestyle='--')
+    ax1.set(xlabel='Channel', ylabel='Intensity'); ax1.grid(True)
+    spec_png = plot_and_encode(fig1); plt.close(fig1)
+    # Plot 2
+    fig2 = plt.figure(figsize=(8,2))
+    for i, pk in enumerate(peaks): plt.vlines(pk['idx'], 0, pk['pers'], color=(['#C94040','#69995D','#CBAC88','#394648'][i] if i<4 else '#CCCCCC'), linewidth=2)
+    plt.xlabel('Channel'); plt.ylabel('Persistence'); plt.grid(True)
+    barcode_png = plot_and_encode(fig2); plt.close(fig2)
+    # Plot 3
+    fig3 = plt.figure(figsize=(5,4)); ax3 = fig3.add_subplot(111, projection='3d')
+    if peaks:
+        p0 = peaks[0]['params']; pts = [(p['thr'],p['wid'],p['prom']) for p in p0 if p['dist']==10]
+        if pts:
+            arr = np.array(pts); counts = [pts.count(tuple(a)) for a in pts]
+            sc = ax3.scatter(arr[:,0], arr[:,1], arr[:,2], s=np.array(counts)*20, c=counts, cmap='viridis')
+            fig3.colorbar(sc, ax=ax3, label='Frequency')
+    ax3.set(xlabel='Threshold', ylabel='Width', zlabel='Prominence')
+    inner_png = plot_and_encode(fig3); plt.close(fig3)
+    # Plot 4
+    labels = ['smoothing','b','thr','wid','prom','dist']; angles = list(np.linspace(0,2*np.pi,len(labels),endpoint=False)) + [0]
+    fig4 = plt.figure(figsize=(4,4)); ax4 = fig4.add_subplot(111, polar=True)
+    for i, pk in enumerate(peaks[:4]):
+        vals = []
+        for L in labels:
+            vs = sorted({p[L] for p in pk['params']}); rng = max(vs)-min(vs) if len(vs)>1 else 0; segs = sum(np.diff(vs)) if rng>0 else 0
+            vals.append(segs/rng if rng>0 else 0)
+        vals += vals[:1]
+        ax4.plot(angles, vals, linewidth=2, label=f"Peak {pk['idx']}"); ax4.fill(angles, vals, alpha=0.1)
+    ax4.set_xticks(angles[:-1]); ax4.set_xticklabels(labels, fontsize=8); ax4.set_yticklabels([])
+    ax4.legend(loc='upper right', bbox_to_anchor=(1.3,1.1), fontsize=7)
+    radar_png = plot_and_encode(fig4); plt.close(fig4)
+    return spec_png, barcode_png, inner_png, radar_png
+`);
+        return pyodide;
+      }).catch(console.error);
 
-def plot_barcode(peaks,div):
-    plt.figure(figsize=(6,1.6))
-    for r,p in enumerate(peaks):
-      clr=C['pk'][r%4] if r<4 else C['spec']
-      plt.vlines(p['idx'],0,p['pers'],c=clr,lw=2)
-    plt.xlabel('Channel'); plt.ylabel('Persistence'); plt.grid(alpha=.4)
-    plt.tight_layout(); fig_to(div)
+      document.getElementById('noise_level').addEventListener('input', e => {
+        document.getElementById('noise_val').textContent = e.target.value;
+      });
 
-def plot_inner(candidate,div):
-    s=candidate['params'][0]['smoothing']
-    b=candidate['params'][0]['bins_factor']
-    dist=int(np.median([p['distance'] for p in candidate['params']]))
-    triplets={}
-    for p in candidate['params']:
-      if p['smoothing']==s and p['bins_factor']==b and p['distance']==dist:
-        key=(p['threshold'],p['width'],p['prominence'])
-        triplets[key]=triplets.get(key,0)+1
-    if not triplets: plt.figure(); fig_to(div); return
-    xs,ys,zs=np.array(list(triplets)).T
-    cs=list(triplets.values()); sz=np.array(cs)*45
-    fig=plt.figure(figsize=(4,3)); ax=fig.add_subplot(111,projection='3d')
-    ax.scatter(xs,ys,zs,s=sz,c=cs,cmap='viridis')
-    ax.set_xlabel('thr'); ax.set_ylabel('width'); ax.set_zlabel('prom')
-    plt.tight_layout(); fig_to(div)
-
-def plot_radar(peaks,div,axes=['smoothing','bins_factor','threshold',
-                               'width','prominence','distance']):
-    N=len(axes); ang=np.linspace(0,2*np.pi,N,endpoint=False).tolist()+[0]
-    fig=plt.figure(figsize=(4,4)); ax=fig.add_subplot(111,polar=True)
-    for i,p in enumerate(peaks[:4]):
-      vals=[len({pp[a] for pp in p['params']})/10 for a in axes]+[0]
-      ax.plot(ang,vals,c=C['pk'][i%4],lw=1.6); ax.fill(ang,vals,alpha=.1)
-    ax.set_xticks(ang[:-1]); ax.set_xticklabels([a.replace('_','\n') for a in axes],
-                                                fontsize=8)
-    ax.set_yticklabels([]); ax.set_ylim(0,1); ax.legend(fontsize=7,loc='upper right',
-                                                        bbox_to_anchor=(1.25,1.05))
-    plt.tight_layout(); fig_to(div)
-# ────────────────────────────────────────────────────────────────────────────────
-#  ⭐  Synthetic-signal generator  (peaks + optional noise)
-# ────────────────────────────────────────────────────────────────────────────────
-def synthetic(n_peaks,noise,std,pts=1000):
-    rng=np.random.default_rng()
-    x=np.linspace(0,pts,pts)
-    ctr=rng.choice(np.arange(100,900),size=n_peaks,replace=False)
-    w=rng.uniform(8,25,n_peaks); a=rng.uniform(.5,1.2,n_peaks)
-    y=sum(ai*np.exp(-((x-ci)/wi)**2) for ai,ci,wi in zip(a,ctr,w))
-    if std>0:
-      y += (rng.normal(0,std,pts) if noise=='gaussian'
-            else rng.uniform(-std,std,pts))
-    return x,y
-# ────────────────────────────────────────────────────────────────────────────────
-#  ⭐  Main button callback
-# ────────────────────────────────────────────────────────────────────────────────
-def run_pipeline(event=None):
-    # read UI
-    n  = int(document.querySelector('#num_peaks').value)
-    σ  = float(document.querySelector('#noise_level').value)
-    nt = document.querySelector('#noise_type').value
-    # generate + detect
-    x,y = synthetic(n,nt,σ)
-    peaks = volumetric_peaks(
-        y, smooth_range=[0,3,5], bin_range=[1,2],
-        thr_range=np.linspace(0,.15,8), wid_range=np.linspace(1,50,8),
-        prom_range=np.linspace(.01,1.0,8), dist_range=[1,5,10,15,20],
-        merging=10, tol=1, top_k=30)
-
-    # clear previous figs
-    for div in ('spectrum_plot','barcode_plot','inner_grid_plot','radar_plot'):
-        document.getElementById(div).innerHTML=''
-
-    # plots
-    plot_spec(x,y,peaks,'spectrum_plot')
-    plot_barcode(peaks,'barcode_plot')
-    if peaks: plot_inner(peaks[0],'inner_grid_plot')
-    plot_radar(peaks,'radar_plot')
-</py-script>
-
+      document.getElementById('run').addEventListener('click', async () => {
+        const pyodide = await pyodideReadyPromise;
+        const n = parseInt(document.getElementById('num_peaks').value, 10);
+        const nl = parseFloat(document.getElementById('noise_level').value);
+        const nt = document.getElementById('noise_type').value;
+        // Get results as a PyProxy, then convert to JS array
+        const resultPy = await pyodide.runPythonAsync(`generate_and_plots(${n}, ${nl}, '${nt}')`);
+        const [specB64, barcodeB64, innerB64, radarB64] = resultPy.toJs();
+        document.getElementById('spec_img').src    = `data:image/png;base64,${specB64}`;
+        document.getElementById('barcode_img').src = `data:image/png;base64,${barcodeB64}`;
+        document.getElementById('inner_img').src   = `data:image/png;base64,${innerB64}`;
+        document.getElementById('radar_img').src   = `data:image/png;base64,${radarB64}`;
+        resultPy.destroy();  // free the proxy
+      });
+    })();
+  </script>
 </body>
 </html>
