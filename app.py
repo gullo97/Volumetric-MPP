@@ -1,21 +1,20 @@
-# Hyper‑Volumetric Persistence – Streamlit demo (updated)
-# ======================================================
-# This app lets users generate a synthetic 1‑D spectrum, run the
-# Hyper‑Volumetric‑Persistence peak finder (core.py), and interactively
-# explore the results.
+# Hyper‑Volumetric Persistence – Streamlit demo (v 3)
+# ====================================================
+# Interactively generate **or upload** a 1‑D spectrum, explore the
+# Hyper‑Volumetric‑Persistence peak‑finding algorithm (core.py), and
+# visualise its outputs.
 #
-# NEW IN THIS REVISION
-# --------------------
-# • **top‑k slider** – choose how many of the most‑persistent peaks to
-#   highlight/colour.
-# • Colours now cycle automatically even when you ask for more peaks
-#   than the base palette size.
-# • Patched `utils.plot_candidate_inner_grid` to avoid the
-#   ``TypeError: unsupported operand type(s) for -: 'list' and 'float'``
-#   when more than four peaks are requested (issue was the internal
-#   ``edges`` helper assuming a NumPy array).
+# ✨ What’s new in v3
+# ------------------
+# • **Signal uploader** – drag‑and‑drop a plain‑text `.txt` file with one
+#   or two numeric columns (details below).
+# • **Advanced detection settings** – sidebar expander lets you set *min*,
+#   *max*, and *n steps* for every hyper‑parameter in the grid search.
+# • Inline guidance sprinkled throughout the interface.
+# • Same bug‑fix patch for `plot_candidate_inner_grid`, but now wrapped
+#   inside a helper function.
 #
-# NOTE: keep this file in the same folder as **core.py** and **utils.py**.
+# ─────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
 
@@ -24,6 +23,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from math import ceil
+from pathlib import Path
 
 from core import find_peaks_volumetric_persistence
 import utils  # we will monkey‑patch one function below
@@ -33,9 +33,15 @@ from utils import (
     plot_multi_volumetric_persistence_radar_polygon,
 )
 
-# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="Hyper‑Volumetric Persistence demo",
+    page_icon="🔬",
+    layout="wide",
+)
+
+# ----------------------------------------------------------------------------
 # 🔧 Patch utils.plot_candidate_inner_grid to fix list‑minus‑float bug
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 
 def _patched_plot_candidate_inner_grid(
     candidate: dict,
@@ -79,13 +85,16 @@ def _patched_plot_candidate_inner_grid(
         return
 
     # ---------------- aggregate counts ----------------
-    counts = Counter(tuple(p[f] for f in free_params) for p in filtered)
-    coords = list(counts.keys())
-    freqs = list(counts.values())
+    from itertools import repeat
+
+    def _key(p):
+        return tuple(p[f] for f in free_params)
+
+    vals, freqs = np.unique([_key(p) for p in filtered], return_counts=True, axis=0)
 
     # ---------------- plotting helpers ----------------
     def _scatter(ax, xs, ys, zs=None):
-        sizes = [f * 40 for f in freqs]
+        sizes = freqs * 40
         if use_frequency_colormap:
             cargs = dict(c=freqs, cmap=colormap)
         else:
@@ -101,7 +110,7 @@ def _patched_plot_candidate_inner_grid(
     # ---------------- choose view ----------------
     if view_type == "points" or dim < 3:
         if dim == 3:
-            x, y, z = zip(*coords)
+            x, y, z = vals.T
             fig = plt.figure(figsize=(7, 5))
             ax = fig.add_subplot(111, projection="3d")
             _scatter(ax, x, y, z)
@@ -109,13 +118,13 @@ def _patched_plot_candidate_inner_grid(
             ax.set_ylabel(free_params[1])
             ax.set_zlabel(free_params[2])
         elif dim == 2:
-            x, y = zip(*coords)
+            x, y = vals.T
             fig, ax = plt.subplots(figsize=(7, 4))
             _scatter(ax, x, y)
             ax.set_xlabel(free_params[0])
             ax.set_ylabel(free_params[1])
         else:  # 1‑D
-            x = [c[0] for c in coords]
+            (x,) = vals.T
             fig, ax = plt.subplots(figsize=(7, 3))
             ax.stem(x, freqs, use_line_collection=True)
             ax.set_xlabel(free_params[0])
@@ -129,74 +138,179 @@ def _patched_plot_candidate_inner_grid(
 utils.plot_candidate_inner_grid = _patched_plot_candidate_inner_grid
 from utils import plot_candidate_inner_grid  # re‑import patched symbol
 
-# -----------------------------------------------------------------------------
-# Streamlit UI
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Helper utilities
+# ----------------------------------------------------------------------------
 
-st.title("Hyper‑Volumetric Persistence – Interactive demo")
+def build_linspace(min_val: float, max_val: float, steps: int, *, as_int: bool = False):
+    """Return **unique** linspace including end‑points. Optionally cast to int."""
+    if steps < 2 or np.isclose(min_val, max_val):
+        return [int(min_val) if as_int else float(min_val)]
+    arr = np.linspace(min_val, max_val, steps)
+    if as_int:
+        arr = np.unique(arr.astype(int))
+    return list(arr)
 
-# ---------------- sidebar controls ----------------
+
+def load_txt_signal(file) -> tuple[np.ndarray, np.ndarray]:
+    """Read 1‑ or 2‑column .txt file ➜ (x, spectrum)."""
+    data = np.loadtxt(file)
+    if data.ndim == 1:  # 1 column → intensities, use index as x
+        spectrum = data
+        x = np.arange(len(spectrum))
+    elif data.shape[1] >= 2:
+        x = data[:, 0]
+        spectrum = data[:, 1]
+    else:
+        raise ValueError("File must contain 1 or 2 numeric columns.")
+    return x, spectrum
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🎛️ Sidebar – signal source & controls
+# ─────────────────────────────────────────────────────────────────────────────
+
 side = st.sidebar
-side.header("Signal & detection controls")
+side.header("Signal source")
 
-n_peaks = side.slider("Number of synthetic peaks", min_value=1, max_value=10, value=3)
-noise_sigma = side.slider("Gaussian noise σ", 0.0, 0.2, 0.05, step=0.005)
-seed = side.number_input("Random seed", value=42, step=1)
+uploaded_file = side.file_uploader(
+    "Upload a spectrum (.txt)",
+    type=["txt"],
+    help="Provide either *one* column (intensity only) or *two* columns (x, intensity) of whitespace‑ or comma‑separated numbers.",
+)
+
+if uploaded_file is None:
+    side.markdown("**No file chosen – generating synthetic spectrum.**")
+    n_peaks = side.slider("Number of synthetic peaks", 1, 10, 3)
+    noise_sigma = side.slider("Gaussian noise σ", 0.0, 0.2, 0.05, step=0.005)
+    seed = side.number_input("Random seed", value=42, step=1)
+else:
+    side.success(f"Using uploaded file ➜ {Path(uploaded_file.name).name}")
 
 side.markdown("---")
+side.header("Highlight settings")
 
-top_k = side.slider("Most‑persistent peaks to highlight", min_value=1, max_value=20, value=4)
+max_k = 30  # hard upper‑bound
+_top_k = side.slider("Most‑persistent peaks to highlight", 1, max_k, 4)
 side.caption("Plots & table will recolour / resize automatically.")
 
-if side.button("Generate / analyse") or "spectrum" not in st.session_state:
-    rng = np.random.default_rng(int(seed))
-    x = np.linspace(0, 1000, 1000)
+# ─────────────────────────────────────────────────────────────────────────────
+# 🛠️ Advanced detection settings
+# ─────────────────────────────────────────────────────────────────────────────
 
-    # ----- build synthetic spectrum -----
-    spectrum = np.zeros_like(x)
-    centres = rng.uniform(50, 950, size=n_peaks)
-    widths = rng.uniform(8, 25, size=n_peaks)
-    amplitudes = rng.uniform(0.6, 1.0, size=n_peaks)
-    for c, w, a in zip(centres, widths, amplitudes):
-        spectrum += a * np.exp(-((x - c) / w) ** 2)
-    spectrum += noise_sigma * rng.standard_normal(len(x))
+adv = side.expander("Advanced detection settings", expanded=False)
+adv.caption("Define the hyper‑parameter *grid* the algorithm will sweep.")
 
-    st.session_state["x"] = x
-    st.session_state["spectrum"] = spectrum
+# Layout helper – each parameter gets 3 number_inputs (min/max/steps)
 
-    # ----- parameter ranges (same as paper/demo) -----
-    smoothing_range = [0, 3, 5]
-    bins_factor_range = [1, 2]
-    threshold_range = np.linspace(0, 0.15, 10)
-    width_range = np.linspace(1, 50, 10)
-    prominence_range = np.linspace(0.01, 1.0, 10)
-    distance_range = np.array([1, 5, 10, 15, 20])
+def triple(label, default):
+    c1, c2, c3 = adv.columns(3)
+    lo = c1.number_input(f"{label} min", value=default[0])
+    hi = c2.number_input(f"{label} max", value=default[1])
+    stp = c3.number_input(f"{label} steps", min_value=1, value=default[2])
+    return lo, hi, stp
 
-    peaks_info = find_peaks_volumetric_persistence(
-        spectrum,
-        smoothing_range,
-        bins_factor_range,
-        threshold_range,
-        width_range,
-        prominence_range,
-        distance_range,
-        merging_range=10,
-        tol=1,
-        parallel=True,
-        top_k=30,
+params_defaults = {
+    "Smoothing": (0, 5, 3),  # ints
+    "Bins factor": (1, 2, 2),  # ints
+    "Threshold": (0.0, 0.15, 10),
+    "Width": (1.0, 50.0, 10),
+    "Prominence": (0.01, 1.0, 10),
+    "Distance": (1, 20, 5),  # ints
+}
+
+(
+    (smooth_min, smooth_max, smooth_n),
+    (bins_min, bins_max, bins_n),
+    (thr_min, thr_max, thr_n),
+    (wid_min, wid_max, wid_n),
+    (prom_min, prom_max, prom_n),
+    (dist_min, dist_max, dist_n),
+) = [triple(k, v) for k, v in params_defaults.items()]
+
+merging_range = st.sidebar.slider(
+    "Merging range (channels)",
+    min_value=0,
+    max_value=100,
+    value=10,
+    help="Cluster peaks whose original‐channel indices are within this many channels of each other"
+)
+
+run_btn = side.button("Run analysis", type="primary")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🚀 Generate / load spectrum & run detection
+# ─────────────────────────────────────────────────────────────────────────────
+
+if "init" not in st.session_state or run_btn:
+
+    if uploaded_file is None:
+        # -- generate synthetic --
+        rng = np.random.default_rng(int(seed))
+        x = np.linspace(0, 1000, 1000)
+        spectrum = np.zeros_like(x)
+        centres = rng.uniform(50, 950, size=n_peaks)
+        widths = rng.uniform(8, 25, size=n_peaks)
+        amplitudes = rng.uniform(0.6, 1.0, size=n_peaks)
+        for c, w, a in zip(centres, widths, amplitudes):
+            spectrum += a * np.exp(-((x - c) / w) ** 2)
+        spectrum += noise_sigma * rng.standard_normal(len(x))
+    else:
+        try:
+            x, spectrum = load_txt_signal(uploaded_file)
+        except Exception as e:
+            st.error(f"Could not read file: {e}")
+            st.stop()
+
+    # -- build parameter ranges from sidebar --
+    smoothing_range = build_linspace(smooth_min, smooth_max, int(smooth_n), as_int=True)
+    bins_factor_range = build_linspace(bins_min, bins_max, int(bins_n), as_int=True)
+    threshold_range = build_linspace(thr_min, thr_max, int(thr_n))
+    width_range = build_linspace(wid_min, wid_max, int(wid_n))
+    prominence_range = build_linspace(prom_min, prom_max, int(prom_n))
+    distance_range = np.array(build_linspace(dist_min, dist_max, int(dist_n), as_int=True))
+
+    # Safeguard top_k vs expected max
+    top_k = min(_top_k, max_k)
+
+    # -- run detection --
+    with st.spinner("Running hyper‑grid peak detection…"):
+        peaks_info = find_peaks_volumetric_persistence(
+            spectrum,
+            smoothing_range,
+            bins_factor_range,
+            threshold_range,
+            width_range,
+            prominence_range,
+            distance_range,
+            merging_range=merging_range,
+            tol=1,
+            parallel=True,
+            top_k=max_k,  # compute ample; we slice later
+        )
+
+    # cache in session_state
+    st.session_state.update(
+        {
+            "x": x,
+            "spectrum": spectrum,
+            "peaks_info": peaks_info,
+            "top_k": top_k,
+        }
     )
-    st.session_state["peaks_info"] = peaks_info
+    st.session_state["init"] = True
 
-# ---------------- retrieve cached data ----------------
+# ---------------- Pull from state ----------------
 
 x = st.session_state["x"]
 spectrum = st.session_state["spectrum"]
 peaks_info = st.session_state["peaks_info"]
+top_k = st.session_state["top_k"]
 
-# ---------------- colour palette (auto‑extend) ----------------
-base_det_colours = ["#C94040", "#69995D", "#CBAC88", "#394648"]
-factor = ceil(top_k / len(base_det_colours))
-colour_cycle = (base_det_colours * factor)[:top_k]
+# ---------------- dynamic colour palette ----------------
+
+base_colours = ["#C94040", "#69995D", "#CBAC88", "#394648"]
+colour_cycle = (base_colours * ceil(top_k / len(base_colours)))[:top_k]
 COLORS = {
     "spectrum": "#8499C4",
     "detected_peak": colour_cycle,
@@ -204,26 +318,26 @@ COLORS = {
     "linewidths": [2.0] * len(colour_cycle),
 }
 
-# -----------------------------------------------------------------------------
-# PLOTS
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 📈 Plots
+# ─────────────────────────────────────────────────────────────────────────────
 
-# --- spectrum with highlighted peaks ---
-st.subheader("Synthetic spectrum & highlighted peaks")
+st.markdown("""
+### 1️⃣ Spectrum & highlighted peaks
+Shows the generated (or uploaded) spectrum in blue and the **top‑k** peaks ranked by volumetric persistence. Each coloured dashed line marks one peak’s channel.
+""")
+
 plot_spectrum_with_detected_peaks(
-    x,
-    spectrum,
-    peaks_info,
-    top_k=top_k,
-    detected_style="vertical_line",
-    COLORS=COLORS,
+    x, spectrum, peaks_info, top_k=top_k, detected_style="vertical_line", COLORS=COLORS
 )
 st.pyplot(plt.gcf())
 plt.clf()
 
-# --- persistence barcode ---
-st.subheader("Volumetric‑persistence barcode")
-# Extend colour list so the first *top_k* bars get unique colours
+st.markdown("""
+### 2️⃣ Persistence barcode
+Each vertical bar represents a detected peak; the bar height equals its integrated volumetric persistence across the hyper‑parameter grid. Taller bars ⇒ more robust peaks.
+""")
+
 barcode_cols = {
     "default": "#8499C4",
     "detected_peak": colour_cycle,
@@ -234,28 +348,34 @@ plot_volumetric_persistence_barcode(peaks_info, COLORS=barcode_cols)
 st.pyplot(plt.gcf())
 plt.clf()
 
-# --- inner‑grid exploration for first peak ---
-st.subheader("Inner‑grid exploration (first peak)")
+st.markdown("""
+### 3️⃣ Inner‑grid exploration (first peak)
+Dive into the hyper‑parameter combinations that detect the **strongest** peak. Here we fix `distance` = 10 and plot the remaining free dimensions (Width - Threshold - Prominence) as a point cloud; marker size ⇢ count of detections.
+""")
+
 plot_candidate_inner_grid(
     peaks_info[0],
     outer_smoothing=peaks_info[0]["grid_params"][0]["smoothing"],
     outer_bins=peaks_info[0]["grid_params"][0]["bins_factor"],
     fixed_params={"distance": 10},
-    view_type="points",  # safer than 'voxels' (buggy in some cases)
+    view_type="points",
     single_color=colour_cycle[0],
 )
 
-# --- radar/polygon plot ---
+st.markdown("""
+### 4️⃣ Radar chart – parameter‑space coverage
+The polygon shows how broadly each peak spans the explored range of *each* hyper‑parameter (normalised 0‑1). Peaks covering larger areas survive more settings and are therefore more persistent.
+""")
+
 EXPLORED = {
-    "smoothing": (0, 11),
-    "bins_factor": (1, 2.5),
-    "threshold": (0.0, 0.2),
-    "width": (1.0, 50.0),
-    "prominence": (0.01, 1.0),
-    "distance": (1, 25),
+    "smoothing": (smooth_min, smooth_max),
+    "bins_factor": (bins_min, bins_max),
+    "threshold": (thr_min, thr_max),
+    "width": (wid_min, wid_max),
+    "prominence": (prom_min, prom_max),
+    "distance": (dist_min, dist_max),
 }
 
-st.subheader("Persistence‑coverage radar")
 plot_multi_volumetric_persistence_radar_polygon(
     peaks_info[:top_k],
     explored_ranges=EXPLORED,
@@ -266,9 +386,9 @@ plot_multi_volumetric_persistence_radar_polygon(
 st.pyplot(plt.gcf())
 plt.clf()
 
-# -----------------------------------------------------------------------------
-# Data table
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 🗃️ Data table
+# ─────────────────────────────────────────────────────────────────────────────
 
 table = pd.DataFrame(
     {
@@ -278,5 +398,9 @@ table = pd.DataFrame(
     }
 )
 
-st.subheader("Top‑k persistent peaks – details")
+st.markdown("""
+### 📋 Top‑k peak details
+Interactive table – click column headers to sort.
+""")
+
 st.dataframe(table, hide_index=True)
