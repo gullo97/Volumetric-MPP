@@ -196,15 +196,89 @@ def process_source_data(file_path: str,
     return spectra_array, peaks_per_detector
 
 
-def calibrate_detector_array(sources_data: Dict[str, Dict],
-                             expected_energies: Dict[str, List[float]]) -> Dict[int, Dict]:
+def apply_source_specific_peak_selection(persistent_peaks: List[Dict],
+                                         source_name: str,
+                                         expected_energies: List[float]
+                                         ) -> List[float]:
     """
-    Calibrate all detectors using data from multiple sources.
-    
+    Apply source-specific peak selection rules to choose calibration peaks
+    from the most persistent peaks.
+
     Parameters:
-        sources_data (Dict[str, Dict]): Dictionary with source names as keys and their data as values
-        expected_energies (Dict[str, List[float]]): Expected energies for each source
-        
+        persistent_peaks (List[Dict]): Top-K most persistent peaks
+        source_name (str): Name of the radioactive source
+        expected_energies (List[float]): Expected energies for this source
+
+    Returns:
+        List[float]: Selected peak channels for calibration
+    """
+    if not persistent_peaks:
+        return []
+    
+    expected_count = len(expected_energies)
+    
+    # Source-specific selection rules
+    if source_name.lower() in ["sodium", "cesium"]:
+        # For Sodium and Cesium: select peak at highest channel
+        if expected_count == 1:
+            # Select the peak with highest channel position
+            selected_peak = max(persistent_peaks,
+                                key=lambda x: x['peak_index'])
+            return [selected_peak['peak_index']]
+        else:
+            print(f"Warning: {source_name} expected to have 1 peak, "
+                  f"got {expected_count} expected energies")
+            # Fallback: take highest channel peak
+            selected_peak = max(persistent_peaks,
+                                key=lambda x: x['peak_index'])
+            return [selected_peak['peak_index']]
+
+    elif source_name.lower() == "cobalt":
+        # For Cobalt: select 2 peaks with highest channels (1173, 1332 keV)
+        if expected_count == 2:
+            # Sort by channel position and take the 2 highest
+            sorted_peaks = sorted(persistent_peaks,
+                                  key=lambda x: x['peak_index'],
+                                  reverse=True)
+            selected_peaks = sorted_peaks[:2]
+            # Return sorted by channel position for proper energy assignment
+            selected_peaks.sort(key=lambda x: x['peak_index'])
+            return [peak['peak_index'] for peak in selected_peaks]
+        else:
+            print(f"Warning: Cobalt expected to have 2 peaks, "
+                  f"got {expected_count} expected energies")
+            # Fallback: take highest channel peaks
+            sorted_peaks = sorted(persistent_peaks,
+                                  key=lambda x: x['peak_index'],
+                                  reverse=True)
+            selected_peaks = sorted_peaks[:expected_count]
+            selected_peaks.sort(key=lambda x: x['peak_index'])
+            return [peak['peak_index'] for peak in selected_peaks]
+    
+    else:
+        # Default behavior for other sources: sort by energy (channel position)
+        # and take the expected number of peaks
+        sorted_peaks = sorted(persistent_peaks, key=lambda x: x['peak_index'])
+        selected_peaks = sorted_peaks[:expected_count]
+        return [peak['peak_index'] for peak in selected_peaks]
+
+
+def calibrate_detector_array(sources_data: Dict[str, Dict],
+                             expected_energies: Dict[str, List[float]]
+                             ) -> Dict[int, Dict]:
+    """
+    Calibrate all detectors using data from multiple sources with proper
+    two-step peak selection.
+
+    Step 1: Select top-K peaks based on volumetric persistence
+    Step 2: Apply source-specific selection rules to choose calibration peaks
+
+    Parameters:
+        sources_data (Dict[str, Dict]): Dictionary with source names as keys
+                                       and their data as values
+        expected_energies (Dict[str, List[float]]): Expected energies for
+                                                   each source
+
     Returns:
         Dict[int, Dict]: Calibration results for each detector
     """
@@ -226,25 +300,50 @@ def calibrate_detector_array(sources_data: Dict[str, Dict],
             # Get detected peaks for this detector
             detector_peaks = source_data['peaks'].get(detector_idx, [])
             
+            # Check if we have enough persistent peaks
             if len(detector_peaks) < expected_count:
-                print(f"Warning: Detector {detector_idx}, Source {source_name}: "
-                      f"Only {len(detector_peaks)} peaks detected, expected {expected_count}")
+                print(f"Warning: Detector {detector_idx}, "
+                      f"Source {source_name}: "
+                      f"Only {len(detector_peaks)} peaks detected "
+                      f"(persistence-filtered), expected {expected_count} "
+                      f"for calibration")
                 continue
-            
-            # Select peaks (take the highest persistence peaks)
-            detector_peaks.sort(key=lambda x: x['persistence'], reverse=True)
-            selected_peaks = detector_peaks[:expected_count]
-            
-            # Sort by channel position for proper energy assignment
-            selected_peaks.sort(key=lambda x: x['peak_index'])
-            peak_channels = [peak['peak_index'] for peak in selected_peaks]
-            
-            peaks_per_source[source_name] = peak_channels
-            aggregated_channels.extend(peak_channels)
-            aggregated_energies.extend(expected_energy_list)
-        
+
+            # STEP 1: The peaks are already the top-K most persistent
+            # These peaks come pre-filtered by the volumetric persistence
+            # algorithm
+
+            # STEP 2: Apply source-specific selection rules
+            selected_peak_channels = apply_source_specific_peak_selection(
+                detector_peaks, source_name, expected_energy_list
+            )
+
+            if len(selected_peak_channels) != expected_count:
+                print(f"Warning: Detector {detector_idx}, "
+                      f"Source {source_name}: "
+                      f"Selected {len(selected_peak_channels)} peaks, "
+                      f"expected {expected_count}")
+                if len(selected_peak_channels) == 0:
+                    continue
+
+            # Map selected peaks to their corresponding energies
+            # Sort both to ensure proper correspondence
+            selected_peak_channels.sort()  # Sort by channel (energy)
+            sorted_energies = sorted(expected_energy_list)  # Sort energies
+
+            # Take only the number of peaks we actually found
+            n_peaks_to_use = min(len(selected_peak_channels),
+                                 len(sorted_energies))
+            final_channels = selected_peak_channels[:n_peaks_to_use]
+            final_energies = sorted_energies[:n_peaks_to_use]
+
+            peaks_per_source[source_name] = final_channels
+            aggregated_channels.extend(final_channels)
+            aggregated_energies.extend(final_energies)
+
         # Perform calibration
-        calibration = calibrate_detector(aggregated_channels, aggregated_energies)
+        calibration = calibrate_detector(aggregated_channels,
+                                         aggregated_energies)
         
         calibration_results[detector_idx] = {
             'calibration': calibration,
@@ -377,13 +476,25 @@ def create_parameter_grid(smoothing_config: Dict = None,
         steps = config['steps']
         
         if steps == 1:
-            return [min_val]
+            if param_name in ['bins_factor', 'smoothing', 'distance']:
+                return [int(min_val)]
+            else:
+                return [min_val]
         elif steps == 2:
-            return [min_val, max_val]
+            if param_name in ['bins_factor', 'smoothing', 'distance']:
+                return [int(min_val), int(max_val)]
+            else:
+                return [min_val, max_val]
         else:
-            if param_name == 'bins_factor':
-                # For bins_factor, use integer values
-                return list(np.linspace(min_val, max_val, steps, dtype=int))
+            # Parameters that should be integers
+            if param_name in ['bins_factor', 'smoothing', 'distance']:
+                # For integer parameters, use integer values and convert to regular Python int
+                values = np.linspace(min_val, max_val, steps, dtype=int)
+                return [int(v) for v in values]
+            elif param_name == 'width':
+                # Width can be float, but round to reasonable precision
+                values = np.linspace(min_val, max_val, steps)
+                return [round(float(v), 1) for v in values]
             else:
                 return list(np.linspace(min_val, max_val, steps))
     
