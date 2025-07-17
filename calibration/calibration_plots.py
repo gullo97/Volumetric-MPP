@@ -15,7 +15,7 @@ import os
 # Add parent directory to path to import utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from calibration_core import channel_to_energy
+from calibration_core import channel_to_energy, detect_peaks_single_detector
 
 # Font configuration for plots
 FONTSIZE = {
@@ -198,7 +198,9 @@ def plot_single_detector_calibration(detector_idx: int,
 def plot_combined_source_spectra(detector_idx: int,
                                   sources_data: Dict[str, Dict],
                                   source_colors: Optional[Dict[str, str]] = None,
-                                  save_path: Optional[str] = None):
+                                  save_path: Optional[str] = None,
+                                  show_all_peaks_in_barcode: bool = True,
+                                  detection_params: Optional[Dict] = None):
     """
     Plot combined spectra from multiple sources for a given detector.
     
@@ -207,18 +209,23 @@ def plot_combined_source_spectra(detector_idx: int,
         sources_data (Dict[str, Dict]): Data from all sources
         source_colors (Optional[Dict[str, str]]): Colors for each source
         save_path (Optional[str]): Path to save plot
+        show_all_peaks_in_barcode (bool): If True, show ALL detected peaks
+                                         in barcode, not just the top-k
+        detection_params (Optional[Dict]): Detection parameters needed if
+                                          show_all_peaks_in_barcode is True
     """
     if source_colors is None:
         source_colors = {
-            "Cesium": "#CBAC88", 
-            "Sodium": "#69995D", 
+            "Cesium": "#CBAC88",
+            "Sodium": "#69995D",
             "Cobalt": "#C94040"
         }
     
-    fig, (ax_spec, ax_barcode) = plt.subplots(2, 1, figsize=(10, 8), 
+    fig, (ax_spec, ax_barcode) = plt.subplots(2, 1, figsize=(10, 8),
                                               sharex=True)
     
     max_channel = 0
+    all_peaks_for_barcode = {}  # Store all peaks for barcode plot
     
     for source_name, source_data in sources_data.items():
         spectra = source_data['spectra']
@@ -232,34 +239,51 @@ def plot_combined_source_spectra(detector_idx: int,
         max_channel = max(max_channel, len(spectrum))
         
         # Normalize spectrum
-        norm_spec = spectrum / np.max(spectrum) if np.max(spectrum) > 0 else spectrum
+        norm_spec = (spectrum / np.max(spectrum)
+                     if np.max(spectrum) > 0 else spectrum)
         
         color = source_colors.get(source_name, 'black')
         
         # Plot spectrum
-        ax_spec.plot(channels, norm_spec, color=color, linewidth=1.5, 
+        ax_spec.plot(channels, norm_spec, color=color, linewidth=1.5,
                      label=f"{source_name}")
         
-        # Plot detected peaks
+        # Plot detected peaks (only the selected top-k)
         if detector_idx in peaks:
-            peak_channels = [peak['peak_index'] for peak in peaks[detector_idx]]
-            peak_heights = [norm_spec[int(ch)] for ch in peak_channels 
-                           if int(ch) < len(norm_spec)]
-            peak_channels = [ch for ch in peak_channels 
+            peak_channels = [peak['peak_index']
+                             for peak in peaks[detector_idx]]
+            peak_heights = [norm_spec[int(ch)] for ch in peak_channels
                             if int(ch) < len(norm_spec)]
+            peak_channels = [ch for ch in peak_channels
+                             if int(ch) < len(norm_spec)]
             
-            ax_spec.scatter(peak_channels, peak_heights, color=color, 
-                           s=80, marker='o', edgecolor='black', 
-                           zorder=5, alpha=0.8)
-            
-            # Barcode plot
-            for i, peak in enumerate(peaks[detector_idx]):
-                persistence = peak['persistence']
-                channel = peak['peak_index']
-                ax_barcode.vlines(channel, 0, persistence, colors=color, 
-                                 lw=2, alpha=0.95)
-                ax_barcode.scatter(channel, persistence, color=color, 
-                                  s=50, edgecolor='k', zorder=3)
+            ax_spec.scatter(peak_channels, peak_heights, color=color,
+                            s=80, marker='o', edgecolor='black',
+                            zorder=5, alpha=0.8)
+        
+        # For barcode plot: get all peaks (not just selected top-k)
+        if show_all_peaks_in_barcode and detection_params is not None:
+            # Re-detect peaks without top_k limit for this source
+            all_peaks = detect_peaks_single_detector(
+                spectrum, detection_params, top_k=1000  # Get all peaks
+            )
+            all_peaks_for_barcode[source_name] = all_peaks
+        else:
+            # Use the existing filtered peaks
+            all_peaks_for_barcode[source_name] = (
+                peaks.get(detector_idx, [])
+            )
+    
+    # Barcode plot with all peaks
+    for source_name, all_peaks in all_peaks_for_barcode.items():
+        color = source_colors.get(source_name, 'black')
+        for peak in all_peaks:
+            persistence = peak['persistence']
+            channel = peak['peak_index']
+            ax_barcode.vlines(channel, 0, persistence, colors=color,
+                              lw=2, alpha=0.95)
+            ax_barcode.scatter(channel, persistence, color=color,
+                               s=50, edgecolor='k', zorder=3)
     
     # Format plots
     ax_spec.set_ylabel('Normalized Counts', fontsize=FONTSIZE["label"])
@@ -271,7 +295,14 @@ def plot_combined_source_spectra(detector_idx: int,
     
     ax_barcode.set_xlabel('Channel', fontsize=FONTSIZE["label"])
     ax_barcode.set_ylabel('Peak Persistence', fontsize=FONTSIZE["label"])
-    ax_barcode.set_title('Peak Persistence Barcode', fontsize=FONTSIZE["title"])
+    
+    # Update title based on what peaks are shown
+    if show_all_peaks_in_barcode and detection_params is not None:
+        barcode_title = 'All Detected Peaks - Persistence Barcode'
+    else:
+        barcode_title = 'Selected Peaks - Persistence Barcode'
+    ax_barcode.set_title(barcode_title, fontsize=FONTSIZE["title"])
+    
     ax_barcode.grid(True, linestyle='--', alpha=0.6)
     ax_barcode.tick_params(axis='both', labelsize=FONTSIZE["ticks"])
     
