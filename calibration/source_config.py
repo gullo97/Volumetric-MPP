@@ -117,6 +117,41 @@ SOURCE_ENERGY_CATEGORIES = {
     "multi_peak": ["Europium", "Barium"]
 }
 
+# Expected channel ranges for peak validation (approximate)
+# These are rough estimates based on typical detector calibrations
+# Adjust based on your specific detector characteristics
+SOURCE_CHANNEL_RANGES = {
+    "Sodium": {
+        "expected_ranges": [(300, 800)],  # ~511 keV
+        "description": "511 keV annihilation peak"
+    },
+    "Cesium": {
+        "expected_ranges": [(550, 900)],  # ~662 keV  
+        "description": "662 keV gamma peak"
+    },
+    "Cobalt": {
+        "expected_ranges": [(1200, 1400), (1400, 1700)],  # ~1173, 1332 keV
+        "description": "1173 and 1332 keV gamma peaks"
+    },
+    "Americium": {
+        "expected_ranges": [(50, 150)],  # ~59.5 keV
+        "description": "59.5 keV low energy peak"
+    },
+    "Barium": {
+        "expected_ranges": [(60, 120), (280, 420)],  # ~81, 356 keV
+        "description": "81 and 356 keV peaks"
+    },
+    "Europium": {
+        "expected_ranges": [(100, 180), (200, 280), (280, 400), 
+                           (650, 850), (800, 1050), (1200, 1600)],
+        "description": "Multiple calibration peaks"
+    },
+    "Manganese": {
+        "expected_ranges": [(700, 1000)],  # ~835 keV
+        "description": "835 keV peak"
+    }
+}
+
 
 def get_source_config(source_name: str) -> dict:
     """

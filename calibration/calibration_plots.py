@@ -248,31 +248,57 @@ def plot_combined_source_spectra(detector_idx: int,
         ax_spec.plot(channels, norm_spec, color=color, linewidth=1.5,
                      label=f"{source_name}")
         
-        # Plot detected peaks (only the selected top-k)
+        # Plot detected peaks (only the selected calibration peaks)
         if detector_idx in peaks:
-            peak_channels = [peak['peak_index']
-                             for peak in peaks[detector_idx]]
+            peak_data = peaks[detector_idx]
+            if isinstance(peak_data, dict) and 'calibration_peaks' in peak_data:
+                # New structure: extract calibration peaks
+                peak_channels = [peak['peak_index']
+                               for peak in peak_data['calibration_peaks']]
+            else:
+                # Old structure: direct list of peaks
+                peak_channels = [peak['peak_index'] for peak in peak_data]
+                
             peak_heights = [norm_spec[int(ch)] for ch in peak_channels
-                            if int(ch) < len(norm_spec)]
+                           if int(ch) < len(norm_spec)]
             peak_channels = [ch for ch in peak_channels
-                             if int(ch) < len(norm_spec)]
+                           if int(ch) < len(norm_spec)]
             
             ax_spec.scatter(peak_channels, peak_heights, color=color,
-                            s=80, marker='o', edgecolor='black',
-                            zorder=5, alpha=0.8)
+                           s=80, marker='o', edgecolor='black',
+                           zorder=5, alpha=0.8)
         
-        # For barcode plot: get all peaks (not just selected top-k)
-        if show_all_peaks_in_barcode and detection_params is not None:
-            # Re-detect peaks without top_k limit for this source
-            all_peaks = detect_peaks_single_detector(
-                spectrum, detection_params, top_k=1000  # Get all peaks
-            )
-            all_peaks_for_barcode[source_name] = all_peaks
+        # For barcode plot: get all peaks for visualization
+        if show_all_peaks_in_barcode:
+            # Use the stored all_peaks if available
+            if detector_idx in peaks:
+                peak_data = peaks[detector_idx]
+                if isinstance(peak_data, dict) and 'all_peaks' in peak_data:
+                    all_peaks_for_barcode[source_name] = peak_data['all_peaks']
+                elif detection_params is not None:
+                    # Fallback: re-detect with extended range
+                    all_peaks = detect_peaks_single_detector(
+                        spectrum, detection_params, top_k=1000
+                    )
+                    # Handle new return format (calibration_peaks, all_peaks)
+                    if isinstance(all_peaks, tuple):
+                        all_peaks_for_barcode[source_name] = all_peaks[1]
+                    else:
+                        all_peaks_for_barcode[source_name] = all_peaks
+                else:
+                    # Use existing peaks as fallback
+                    if isinstance(peak_data, dict) and 'calibration_peaks' in peak_data:
+                        all_peaks_for_barcode[source_name] = peak_data['calibration_peaks']
+                    else:
+                        all_peaks_for_barcode[source_name] = peak_data
         else:
-            # Use the existing filtered peaks
-            all_peaks_for_barcode[source_name] = (
-                peaks.get(detector_idx, [])
-            )
+            # Use only the calibration peaks
+            if detector_idx in peaks:
+                peak_data = peaks[detector_idx]
+                if isinstance(peak_data, dict) and 'calibration_peaks' in peak_data:
+                    all_peaks_for_barcode[source_name] = peak_data['calibration_peaks']
+                else:
+                    all_peaks_for_barcode[source_name] = peak_data
     
     # Barcode plot with all peaks
     for source_name, all_peaks in all_peaks_for_barcode.items():
@@ -368,7 +394,14 @@ def plot_3d_energy_spectrum(sources_data: Dict[str, Dict],
             calib = calibration_results[det]['calibration']
             if calib['slope'] is not None:
                 new_det_idx = good_detectors.index(det)
-                for peak in peaks[det]:
+                # Handle new peak structure
+                peak_data = peaks[det]
+                if isinstance(peak_data, dict) and 'calibration_peaks' in peak_data:
+                    detector_peaks = peak_data['calibration_peaks']
+                else:
+                    detector_peaks = peak_data
+                    
+                for peak in detector_peaks:
                     energy = channel_to_energy(
                         peak['peak_index'], calib['slope'], calib['intercept']
                     )

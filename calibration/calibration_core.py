@@ -54,20 +54,31 @@ def load_data_from_csv(file_path: str) -> np.ndarray:
 
 
 def detect_peaks_single_detector(spectrum: np.ndarray, 
-                                  detection_params: Dict,
-                                  top_k: int = 5) -> List[Dict]:
+                                detection_params: Dict,
+                                top_k: int = 5,
+                                extended_top_k: int = None
+                                ) -> Tuple[List[Dict], List[Dict]]:
     """
     Detect peaks in a single detector spectrum using volumetric persistence.
     
     Parameters:
         spectrum (np.ndarray): 1D spectrum array
         detection_params (Dict): Parameters for peak detection
-        top_k (int): Number of top peaks to return
+        top_k (int): Number of top peaks to return for calibration
+        extended_top_k (int): Larger number for visualization 
+                             (default: top_k * 3)
         
     Returns:
-        List[Dict]: List of detected peaks with persistence info
+        Tuple[List[Dict], List[Dict]]: (calibration_peaks, all_peaks_for_viz)
+            - calibration_peaks: Top-k peaks for calibration
+            - all_peaks_for_viz: Extended peaks for visualization
     """
-    return find_peaks_volumetric_persistence(
+    if extended_top_k is None:
+        # At least 3x or 20 peaks for visualization
+        extended_top_k = max(top_k * 3, 20)  
+    
+    # Get extended peaks for visualization
+    all_peaks = find_peaks_volumetric_persistence(
         spectrum,
         smoothing_range=detection_params['smoothing_range'],
         bins_factor_range=detection_params['bins_factor_range'],
@@ -78,31 +89,43 @@ def detect_peaks_single_detector(spectrum: np.ndarray,
         merging_range=detection_params.get('merging_range', 5),
         tol=detection_params.get('tol', 1),
         parallel=detection_params.get('parallel', True),
-        top_k=top_k
+        top_k=extended_top_k  # Get more peaks for visualization
     )
+    
+    # Extract calibration peaks (top-k)
+    calibration_peaks = all_peaks[:top_k]
+    
+    return calibration_peaks, all_peaks
 
 
 def detect_peaks_multi_detector(spectra_array: np.ndarray,
-                                 detection_params: Dict,
-                                 top_k: int = 5) -> Dict[int, List[Dict]]:
+                               detection_params: Dict,
+                               top_k: int = 5) -> Dict[int, Dict]:
     """
     Detect peaks across multiple detectors.
     
     Parameters:
-        spectra_array (np.ndarray): Spectrum data with shape (n_channels, n_detectors)
+        spectra_array (np.ndarray): Spectrum data with shape 
+                                   (n_channels, n_detectors)
         detection_params (Dict): Parameters for peak detection
         top_k (int): Number of top peaks to return per detector
         
     Returns:
-        Dict[int, List[Dict]]: Dictionary mapping detector index to detected peaks
+        Dict[int, Dict]: Dictionary mapping detector index to:
+            {'calibration_peaks': List[Dict], 'all_peaks': List[Dict]}
     """
     n_channels, n_detectors = spectra_array.shape
     results = {}
     
     for detector_idx in range(n_detectors):
         spectrum = spectra_array[:, detector_idx]
-        peaks = detect_peaks_single_detector(spectrum, detection_params, top_k)
-        results[detector_idx] = peaks
+        calibration_peaks, all_peaks = detect_peaks_single_detector(
+            spectrum, detection_params, top_k
+        )
+        results[detector_idx] = {
+            'calibration_peaks': calibration_peaks,
+            'all_peaks': all_peaks
+        }
     
     return results
 
@@ -165,28 +188,32 @@ def calibrate_detector(peak_channels: List[float],
 
 
 def process_source_data(file_path: str,
-                        source_config: Dict,
-                        detection_params: Dict) -> Tuple[np.ndarray, Dict[int, List[Dict]]]:
+                       source_config: Dict,
+                       detection_params: Dict) -> Tuple[np.ndarray, Dict]:
     """
     Process data for a single radioactive source.
     
     Parameters:
         file_path (str): Path to data file
-        source_config (Dict): Source configuration containing sheet_name, expected_energies, top_k
+        source_config (Dict): Source configuration containing sheet_name, 
+                             expected_energies, top_k
         detection_params (Dict): Peak detection parameters
         
     Returns:
-        Tuple[np.ndarray, Dict[int, List[Dict]]]: Spectrum array and detected peaks per detector
+        Tuple[np.ndarray, Dict]: Spectrum array and peak detection results
+                                per detector containing both calibration
+                                and all peaks for visualization
     """
     # Load data based on file extension
     if file_path.endswith('.xlsx'):
-        spectra_array = load_data_from_excel(file_path, source_config['sheet_name'])
+        spectra_array = load_data_from_excel(file_path, 
+                                            source_config['sheet_name'])
     elif file_path.endswith('.csv'):
         spectra_array = load_data_from_csv(file_path)
     else:
         raise ValueError(f"Unsupported file format: {file_path}")
     
-    # Detect peaks
+    # Detect peaks (now returns both calibration and all peaks)
     peaks_per_detector = detect_peaks_multi_detector(
         spectra_array, 
         detection_params, 
@@ -194,6 +221,147 @@ def process_source_data(file_path: str,
     )
     
     return spectra_array, peaks_per_detector
+
+
+def validate_peak_in_range(peak_channel: float, 
+                          expected_ranges: List[Tuple[int, int]]) -> bool:
+    """
+    Check if a peak channel falls within any of the expected ranges.
+    
+    Parameters:
+        peak_channel (float): Detected peak channel position
+        expected_ranges (List[Tuple[int, int]]): List of (min, max) channel ranges
+        
+    Returns:
+        bool: True if peak is within any expected range
+    """
+    for min_ch, max_ch in expected_ranges:
+        if min_ch <= peak_channel <= max_ch:
+            return True
+    return False
+
+
+def apply_source_specific_peak_selection_robust(persistent_peaks: List[Dict],
+                                               source_name: str,
+                                               expected_energies: List[float]
+                                               ) -> List[float]:
+    """
+    Apply enhanced source-specific peak selection with channel range validation.
+    
+    This function implements iterative peak selection that validates peaks
+    against expected channel ranges and selects the most persistent valid peaks.
+    
+    Parameters:
+        persistent_peaks (List[Dict]): Persistence-ranked peaks (highest first)
+        source_name (str): Name of the radioactive source
+        expected_energies (List[float]): Expected energies for this source
+        
+    Returns:
+        List[float]: Selected peak channels for calibration
+    """
+    from source_config import SOURCE_CHANNEL_RANGES
+    
+    if not persistent_peaks:
+        return []
+    
+    expected_count = len(expected_energies)
+    
+    # Get expected channel ranges for this source
+    if source_name in SOURCE_CHANNEL_RANGES:
+        expected_ranges = SOURCE_CHANNEL_RANGES[source_name]["expected_ranges"]
+    else:
+        print(f"Warning: No channel ranges defined for {source_name}, "
+              f"using fallback selection")
+        # Fallback to original method without range validation
+        return apply_source_specific_peak_selection(
+            persistent_peaks, source_name, expected_energies
+        )
+    
+    # Step 1: Filter peaks by channel ranges
+    valid_peaks = []
+    print(f"   Debug: Filtering {len(persistent_peaks)} peaks for {source_name}")
+    print(f"   Expected ranges: {expected_ranges}")
+    
+    for i, peak in enumerate(persistent_peaks):
+        if validate_peak_in_range(peak['peak_index'], expected_ranges):
+            valid_peaks.append(peak)
+            print(f"   ✅ Peak {i}: ch={peak['peak_index']:.1f}, "
+                  f"pers={peak['persistence']:.3f} - VALID")
+        else:
+            print(f"   ❌ Peak {i}: ch={peak['peak_index']:.1f}, "
+                  f"pers={peak['persistence']:.3f} - outside range")
+    
+    print(f"   Found {len(valid_peaks)} valid peaks out of {len(persistent_peaks)}")
+    
+    if not valid_peaks:
+        print(f"Warning: No peaks found in expected ranges for {source_name}, "
+              f"falling back to standard selection")
+        return apply_source_specific_peak_selection(
+            persistent_peaks, source_name, expected_energies
+        )
+    
+    # Step 2: Source-specific selection from valid peaks
+    # Note: valid_peaks are already sorted by persistence (highest first)
+    # from the original persistent_peaks list
+    
+    if source_name.lower() in ["sodium", "cesium"]:
+        # For single-peak sources: select highest persistence peak in range
+        if expected_count == 1:
+            # Take the first (highest persistence) valid peak
+            selected_peak = valid_peaks[0]
+            print(f"   Selected for {source_name}: ch={selected_peak['peak_index']:.1f}, "
+                  f"pers={selected_peak['persistence']:.3f}")
+            return [selected_peak['peak_index']]
+        else:
+            print(f"Warning: {source_name} expected to have 1 peak, "
+                  f"got {expected_count} expected energies")
+            # Take the first (highest persistence) valid peak
+            selected_peak = valid_peaks[0]
+            print(f"   Selected for {source_name}: ch={selected_peak['peak_index']:.1f}, "
+                  f"pers={selected_peak['persistence']:.3f}")
+            return [selected_peak['peak_index']]
+    
+    elif source_name.lower() == "cobalt":
+        # For Cobalt: need 2 peaks, select by highest persistence in ranges
+        if expected_count == 2:
+            if len(valid_peaks) >= 2:
+                # Take the 2 highest persistence peaks and sort by channel
+                selected_peaks = valid_peaks[:2]
+                # Sort by channel for proper energy assignment
+                selected_peaks.sort(key=lambda x: x['peak_index'])
+                channels = [peak['peak_index'] for peak in selected_peaks]
+                persistences = [peak['persistence'] for peak in selected_peaks]
+                print(f"   Selected for {source_name}: "
+                      f"ch=[{channels[0]:.1f}, {channels[1]:.1f}], "
+                      f"pers=[{persistences[0]:.3f}, {persistences[1]:.3f}]")
+                return channels
+            else:
+                print(f"Warning: Only {len(valid_peaks)} valid peaks found "
+                      f"for Cobalt, expected 2")
+                # Use what we have, sorted by channel
+                selected_peaks = sorted(valid_peaks, 
+                                      key=lambda x: x['peak_index'])
+                channels = [peak['peak_index'] for peak in selected_peaks]
+                print(f"   Selected for {source_name} (limited): {channels}")
+                return channels
+        else:
+            print(f"Warning: Cobalt expected to have 2 peaks, "
+                  f"got {expected_count} expected energies")
+            # Take the highest persistence peaks up to expected count
+            selected_peaks = valid_peaks[:expected_count]
+            selected_peaks.sort(key=lambda x: x['peak_index'])
+            channels = [peak['peak_index'] for peak in selected_peaks]
+            print(f"   Selected for {source_name} (adjusted): {channels}")
+            return channels
+    
+    else:
+        # Default behavior: select highest persistence peaks within range
+        # and sort by channel for proper energy assignment
+        selected_peaks = valid_peaks[:expected_count]
+        selected_peaks.sort(key=lambda x: x['peak_index'])
+        channels = [peak['peak_index'] for peak in selected_peaks]
+        print(f"   Selected for {source_name} (default): {channels}")
+        return channels
 
 
 def apply_source_specific_peak_selection(persistent_peaks: List[Dict],
@@ -297,8 +465,9 @@ def calibrate_detector_array(sources_data: Dict[str, Dict],
             expected_energy_list = expected_energies[source_name]
             expected_count = len(expected_energy_list)
             
-            # Get detected peaks for this detector
-            detector_peaks = source_data['peaks'].get(detector_idx, [])
+            # Get detected peaks for this detector (use calibration peaks)
+            detector_peak_data = source_data['peaks'].get(detector_idx, {})
+            detector_peaks = detector_peak_data.get('calibration_peaks', [])
             
             # Check if we have enough persistent peaks
             if len(detector_peaks) < expected_count:
@@ -313,8 +482,8 @@ def calibrate_detector_array(sources_data: Dict[str, Dict],
             # These peaks come pre-filtered by the volumetric persistence
             # algorithm
 
-            # STEP 2: Apply source-specific selection rules
-            selected_peak_channels = apply_source_specific_peak_selection(
+            # STEP 2: Apply enhanced source-specific selection with validation
+            selected_peak_channels = apply_source_specific_peak_selection_robust(
                 detector_peaks, source_name, expected_energy_list
             )
 
