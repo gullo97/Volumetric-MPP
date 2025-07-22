@@ -50,10 +50,10 @@ RADIOACTIVE_SOURCES = {
 GLOBAL_DETECTION_PARAMS = {
     "smoothing_range": [3, 5, 7],
     "bins_factor_range": [1, 2],
-    "threshold_range": [float(x) for x in np.linspace(0.00001, 0.01, 6)],
-    "width_range": [float(x) for x in np.linspace(1, 50, 5)],
-    "prominence_range": [float(x) for x in np.linspace(0.0001, 0.007, 7)],
-    "distance_range": [5, 10, 15],
+    "threshold_range": [float(x) for x in np.linspace(0.00001, 0.02, 8)],
+    "width_range": [float(x) for x in np.linspace(1, 50, 7)],
+    "prominence_range": [float(x) for x in np.linspace(0.0001, 0.01, 9)],
+    "distance_range": [1, 5, 10, 15],
     "merging_range": 5,
     "tol": 1,
     "parallel": True
