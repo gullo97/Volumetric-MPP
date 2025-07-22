@@ -353,6 +353,9 @@ def plot_3d_energy_spectrum(sources_data: Dict[str, Dict],
     # Create energy axis for calibrated detectors
     channels = np.arange(n_channels)
     
+    # Initialize x_label to avoid UnboundLocalError
+    x_label = 'Channel'  # Default to channel if no calibrated detectors found
+    
     for detector_idx in range(0, min(n_detectors, 50), 2):  # Sample detectors
         spectrum = spectra[:, detector_idx]
         
@@ -395,7 +398,7 @@ def plot_2d_energy_heatmap(sources_data: Dict[str, Dict],
                           calibration_results: Dict[int, Dict],
                           source_name: str,
                           poor_detectors: List[int],
-                          count_threshold: int = 100,
+                          count_threshold: float = 0.001,
                           save_path: Optional[str] = None):
     """Create 2D heatmap of energy spectrum."""
     if source_name not in sources_data:

@@ -39,7 +39,9 @@ def load_data_from_csv(file_path: str) -> np.ndarray:
 
 def detect_peaks_single_detector(spectrum: np.ndarray, 
                                 detection_params: dict,
-                                top_k: int = 5) -> List[int]:
+                                top_k: int = 5,
+                                channel_ranges: List[Tuple[int, int]] = None,
+                                detector_idx: int = -1) -> List[int]:
     """
     Detect peaks for a single detector using volumetric persistence.
     
@@ -47,25 +49,51 @@ def detect_peaks_single_detector(spectrum: np.ndarray,
         spectrum: 1D spectrum data
         detection_params: Detection parameters
         top_k: Number of top peaks to return
+        channel_ranges: Optional list of (start, end) channel ranges to focus on
         
     Returns:
         List of peak channel positions
     """
     try:
-        # Use the global detection parameters
+        # Debug: Check spectrum statistics
+        if detector_idx < 3:  # Only debug first few detectors
+            print(f"      Debug detector {detector_idx}: spectrum stats:")
+            print(f"        Min: {np.min(spectrum):.6f}, Max: {np.max(spectrum):.6f}")
+            print(f"        Mean: {np.mean(spectrum):.6f}, Std: {np.std(spectrum):.6f}")
+        
+        # Use the global detection parameters with optional channel ranges
         peak_results = find_peaks_volumetric_persistence(
             spectrum, 
+            channel_ranges=channel_ranges,
             **detection_params
         )
         
-        # Extract peak indices from the results (which are dictionaries)
-        peak_indices = [peak['peak_index'] for peak in peak_results]
+        # Debug: Report peak detection results
+        if detector_idx < 3:  # Only debug first few detectors
+            print(f"        Found {len(peak_results)} raw peaks")
+            if peak_results:
+                persistences = [p['persistence'] for p in peak_results]
+                print(f"        Persistence range: {min(persistences):.6f} - {max(persistences):.6f}")
         
-        # Return top_k peaks sorted by channel position
-        if len(peak_indices) > top_k:
-            peak_indices = peak_indices[:top_k]
-            
-        return sorted(peak_indices)
+        # peak_results is already sorted by persistence (highest first)
+        # Step 1: Select top_k most persistent peaks
+        if len(peak_results) > top_k:
+            top_persistent_peaks = peak_results[:top_k]
+        else:
+            top_persistent_peaks = peak_results
+        
+        # Step 2: Extract peak indices and sort by channel position
+        # This ensures proper energy assignment in physics-based selection
+        # Convert to regular Python int to avoid np.int64 mixing issues
+        peak_indices = [int(peak['peak_index']) 
+                        for peak in top_persistent_peaks]
+        peak_indices.sort()  # Sort by channel position
+        
+        if detector_idx < 3 and peak_indices:  # Only debug first few detectors
+            print(f"        Selected {len(peak_indices)} peaks at channels: "
+                  f"{peak_indices}")
+        
+        return peak_indices
         
     except Exception as e:
         print(f"Warning: Peak detection failed: {e}")
@@ -138,7 +166,8 @@ def process_source_data(file_path: str,
     
     Parameters:
         file_path: Path to data file
-        source_config: Source configuration including sheet_name/file_path and top_k
+        source_config: Source configuration including sheet_name/file_path, 
+                      energies, and optional channel_ranges
         detection_params: Detection parameters (uses global if None)
         
     Returns:
@@ -156,8 +185,23 @@ def process_source_data(file_path: str,
         # CSV file
         spectra = load_data_from_csv(source_config['file_path'])
     
+    # Apply AUC normalization as first preprocessing step
+    print("   🔄 Applying AUC normalization to make sources comparable...")
+    spectra = normalize_spectra_auc(spectra)
+    
     n_channels, n_detectors = spectra.shape
-    top_k = source_config.get('top_k', 5)
+    
+    # Determine appropriate top_k based on expected peaks and channel ranges
+    expected_count = len(source_config.get('energies', []))
+    channel_ranges = source_config.get('channel_ranges', [])
+    
+    if channel_ranges:
+        # When channel ranges are provided, we can set top_k to expected count
+        # since we're focusing on specific regions
+        top_k = expected_count
+    else:
+        # For full spectrum analysis, use higher top_k for robustness
+        top_k = source_config.get('top_k', 5)
     
     # Detect peaks for each detector
     peaks_data = {}
@@ -165,20 +209,19 @@ def process_source_data(file_path: str,
     for detector_idx in range(n_detectors):
         spectrum = spectra[:, detector_idx]
         
-        # Detect peaks using volumetric persistence
+        # Detect peaks using volumetric persistence with channel ranges
         detected_peaks = detect_peaks_single_detector(
-            spectrum, detection_params, top_k
+            spectrum, detection_params, top_k, channel_ranges
         )
         
-        # Apply channel range filtering if available
-        if 'channel_ranges' in source_config:
+        # Apply channel range filtering if available and not already applied
+        if 'channel_ranges' in source_config and not channel_ranges:
             detected_peaks = apply_channel_range_filter(
                 detected_peaks, source_config['channel_ranges']
             )
         
         # Apply physics-based selection
         if 'source_name' in source_config:
-            expected_count = len(source_config.get('energies', []))
             selected_peaks = select_physics_based_peaks(
                 detected_peaks, source_config['source_name'], expected_count
             )
@@ -346,3 +389,34 @@ def channel_to_energy(channels: np.ndarray, slope: float, intercept: float) -> n
 def energy_to_channel(energies: np.ndarray, slope: float, intercept: float) -> np.ndarray:
     """Convert energies to channel numbers using calibration parameters."""
     return (energies - intercept) / slope
+
+
+def normalize_spectra_auc(spectra: np.ndarray) -> np.ndarray:
+    """
+    Normalize spectra using Area Under Curve (AUC) normalization.
+    
+    Each spectrum is divided by its total area (sum of all counts) to make
+    different sources comparable while preserving relative peak intensities.
+    
+    Parameters:
+        spectra: 2D array of shape (n_channels, n_detectors)
+        
+    Returns:
+        Normalized spectra with same shape as float64
+    """
+    # Ensure we work with float data to avoid integer truncation
+    normalized_spectra = spectra.astype(np.float64)
+    n_channels, n_detectors = spectra.shape
+    
+    for detector_idx in range(n_detectors):
+        spectrum = normalized_spectra[:, detector_idx]
+        total_area = np.sum(spectrum)
+        
+        # Avoid division by zero for empty spectra
+        if total_area > 0:
+            normalized_spectra[:, detector_idx] = spectrum / total_area
+        else:
+            # Keep zero spectrum as is
+            normalized_spectra[:, detector_idx] = spectrum
+    
+    return normalized_spectra
