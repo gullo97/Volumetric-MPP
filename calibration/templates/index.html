@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Detector Calibration Fixer</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #333;
+        }
+        
+        .control-panel {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        
+        .control-row:last-child {
+            margin-bottom: 0;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        
+        .btn-success {
+            background-color: #28a745;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background-color: #1e7e34;
+        }
+        
+        .btn-warning {
+            background-color: #ffc107;
+            color: #212529;
+        }
+        
+        .btn-warning:hover {
+            background-color: #e0a800;
+        }
+        
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
+        
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .form-control {
+            padding: 6px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .progress-panel {
+            background-color: #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .navigation {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .main-content {
+            display: flex;
+            gap: 20px;
+            min-height: 600px;
+        }
+        
+        .left-panel {
+            flex: 0 0 300px;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        
+        .right-panel {
+            flex: 1;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        
+        .peak-info {
+            background-color: white;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            min-height: 400px;
+            font-family: monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            overflow-y: auto;
+        }
+        
+        .plot-container {
+            background-color: white;
+            border-radius: 4px;
+            padding: 10px;
+            min-height: 500px;
+        }
+        
+        .alert {
+            padding: 10px 15px;
+            margin-bottom: 20px;
+            border: 1px solid transparent;
+            border-radius: 4px;
+        }
+        
+        .alert-success {
+            color: #155724;
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        
+        .alert-danger {
+            color: #721c24;
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        
+        .alert-warning {
+            color: #856404;
+            background-color: #fff3cd;
+            border-color: #ffeaa7;
+        }
+        
+        .alert-info {
+            color: #0c5460;
+            background-color: #d1ecf1;
+            border-color: #bee5eb;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .status-ready {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .status-pending {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .file-input {
+            position: absolute;
+            left: -9999px;
+        }
+        
+        .file-input-label {
+            display: inline-block;
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .file-input-label:hover {
+            background-color: #0056b3;
+        }
+        
+        @media (max-width: 768px) {
+            .main-content {
+                flex-direction: column;
+            }
+            
+            .left-panel {
+                flex: none;
+            }
+            
+            .control-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .navigation {
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Interactive Detector Calibration Fixer</h1>
+            <p>Web-based interface for manually correcting failed detector calibrations</p>
+        </div>
+        
+        <!-- Alert messages -->
+        <div id="alertContainer"></div>
+        
+        <!-- Control Panel -->
+        <div class="control-panel">
+            <div class="control-row">
+                <div class="file-input-wrapper">
+                    <input type="file" id="calibrationFile" class="file-input" accept=".csv">
+                    <label for="calibrationFile" class="file-input-label">Load Calibration Results</label>
+                </div>
+                
+                <div class="input-group">
+                    <label for="threshold">CV Error Threshold:</label>
+                    <input type="number" id="threshold" class="form-control" value="0.001" step="0.0001" style="width: 100px;">
+                    <button id="filterBtn" class="btn btn-primary">Filter Failed Detectors</button>
+                </div>
+                
+                <button id="exportBtn" class="btn btn-success">Export Results to Excel</button>
+            </div>
+        </div>
+        
+        <!-- Progress Panel -->
+        <div class="progress-panel">
+            <div class="progress-info">
+                <div id="progressText">Load calibration results to start</div>
+                <div id="detectorInfo"></div>
+            </div>
+            
+            <div class="navigation">
+                <button id="prevBtn" class="btn btn-secondary">Previous Detector</button>
+                <button id="nextBtn" class="btn btn-secondary">Next Detector</button>
+                <button id="skipBtn" class="btn btn-warning">Skip Detector</button>
+                <button id="applyBtn" class="btn btn-success">Apply Calibration</button>
+            </div>
+        </div>
+        
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Left Panel - Peak Selection Info -->
+            <div class="left-panel">
+                <h3>Selected Peaks</h3>
+                <div id="peakInfo" class="peak-info">
+                    Load a detector to see peak selection information.
+                </div>
+                <button id="clearBtn" class="btn btn-danger" style="margin-top: 15px; width: 100%;">Clear All Selections</button>
+            </div>
+            
+            <!-- Right Panel - Spectrum Plots -->
+            <div class="right-panel">
+                <h3>Detector Spectra</h3>
+                <p style="color: #666; margin-bottom: 15px;">Click on peaks to select them for calibration</p>
+                <div id="plotContainer" class="plot-container">
+                    Load calibration results and select a detector to view spectra.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let currentDetectorIdx = 0;
+        let failedDetectors = [];
+        let selectedPeaks = {};
+        let currentDetectorId = null;
+        let spectraData = {};
+        let plots = {};
+        
+        // Source configurations
+        const sources = {
+            'Sodium': { expected_energies: [0.511], color: '#FF6B6B' },
+            'Cesium': { expected_energies: [0.662], color: '#4ECDC4' },
+            'Cobalt': { expected_energies: [1.173, 1.332], color: '#45B7D1' }
+        };
+        
+        // Initialize event listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeEventListeners();
+            updateNavigationState();
+        });
+        
+        function initializeEventListeners() {
+            document.getElementById('calibrationFile').addEventListener('change', handleFileUpload);
+            document.getElementById('filterBtn').addEventListener('click', filterFailedDetectors);
+            document.getElementById('prevBtn').addEventListener('click', previousDetector);
+            document.getElementById('nextBtn').addEventListener('click', nextDetector);
+            document.getElementById('skipBtn').addEventListener('click', skipDetector);
+            document.getElementById('applyBtn').addEventListener('click', applyCalibration);
+            document.getElementById('clearBtn').addEventListener('click', clearSelections);
+            document.getElementById('exportBtn').addEventListener('click', exportResults);
+        }
+        
+        function showAlert(message, type = 'info') {
+            const alertContainer = document.getElementById('alertContainer');
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type}`;
+            alertDiv.textContent = message;
+            
+            alertContainer.innerHTML = '';
+            alertContainer.appendChild(alertDiv);
+            
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.parentNode.removeChild(alertDiv);
+                }
+            }, 5000);
+        }
+        
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const response = await fetch('/upload_calibration', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showAlert(result.message, 'success');
+                } else {
+                    showAlert(result.error, 'danger');
+                }
+            } catch (error) {
+                showAlert(`Upload failed: ${error.message}`, 'danger');
+            }
+        }
+        
+        async function filterFailedDetectors() {
+            const threshold = parseFloat(document.getElementById('threshold').value);
+            
+            try {
+                const response = await fetch('/filter_failed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ threshold: threshold })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    failedDetectors = result.failed_detectors;
+                    currentDetectorIdx = 0;
+                    
+                    if (failedDetectors.length === 0) {
+                        showAlert('No detectors need manual correction with current threshold', 'info');
+                        return;
+                    }
+                    
+                    showAlert(`Found ${result.failed_count} detectors needing correction`, 'warning');
+                    updateProgressText();
+                    loadCurrentDetector();
+                } else {
+                    showAlert(result.error, 'danger');
+                }
+            } catch (error) {
+                showAlert(`Filter failed: ${error.message}`, 'danger');
+            }
+        }
+        
+        async function loadCurrentDetector() {
+            if (failedDetectors.length === 0) return;
+            
+            currentDetectorId = failedDetectors[currentDetectorIdx];
+            updateDetectorInfo();
+            updateNavigationState();
+            
+            // Clear previous selections
+            selectedPeaks = {};
+            
+            try {
+                const response = await fetch(`/get_detector_data/${currentDetectorId}`);
+                const result = await response.json();
+                
+                if (result.success) {
+                    spectraData = result.spectra;
+                    plotSpectra();
+                    updatePeakInfo();
+                } else {
+                    showAlert(result.error, 'danger');
+                }
+            } catch (error) {
+                showAlert(`Failed to load detector data: ${error.message}`, 'danger');
+            }
+        }
+        
+        function plotSpectra() {
+            const plotContainer = document.getElementById('plotContainer');
+            plotContainer.innerHTML = '';
+            
+            const sourceNames = Object.keys(sources);
+            
+            sourceNames.forEach((sourceName, index) => {
+                if (!(sourceName in spectraData)) return;
+                
+                const data = spectraData[sourceName];
+                const plotDiv = document.createElement('div');
+                plotDiv.id = `plot-${sourceName}`;
+                plotDiv.style.height = '200px';
+                plotDiv.style.marginBottom = '20px';
+                plotContainer.appendChild(plotDiv);
+                
+                // Create spectrum trace
+                const spectrumTrace = {
+                    x: data.channels,
+                    y: data.spectrum,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'Spectrum',
+                    line: { color: '#333333', width: 1 },
+                    hovertemplate: 'Channel: %{x}<br>Intensity: %{y:.6f}<extra></extra>'
+                };
+                
+                const traces = [spectrumTrace];
+                
+                // Add auto-detected peaks
+                if (data.auto_peaks && data.auto_peaks.length > 0) {
+                    const autoPeakTrace = {
+                        x: data.auto_peaks.map(p => p.channel),
+                        y: data.auto_peaks.map(p => p.intensity),
+                        type: 'scatter',
+                        mode: 'markers',
+                        name: 'Auto Peaks',
+                        marker: { 
+                            color: 'lightblue', 
+                            size: 8,
+                            symbol: 'diamond'
+                        }
+                    };
+                    traces.push(autoPeakTrace);
+                }
+                
+                // Add selected peaks
+                if (selectedPeaks[sourceName]) {
+                    const selectedPeakTrace = {
+                        x: selectedPeaks[sourceName].map(p => p.channel),
+                        y: selectedPeaks[sourceName].map(p => p.intensity),
+                        type: 'scatter',
+                        mode: 'markers',
+                        name: 'Selected',
+                        marker: { 
+                            color: data.color, 
+                            size: 12,
+                            line: { color: 'black', width: 2 }
+                        }
+                    };
+                    traces.push(selectedPeakTrace);
+                }
+                
+                const layout = {
+                    title: `${sourceName} - Expected: ${data.expected_energies.join(', ')} MeV`,
+                    xaxis: { title: 'Channel' },
+                    yaxis: { title: 'Normalized Intensity' },
+                    showlegend: true,
+                    margin: { t: 50, b: 50, l: 50, r: 50 }
+                };
+                
+                const config = {
+                    responsive: true,
+                    displayModeBar: true
+                };
+                
+                Plotly.newPlot(plotDiv.id, traces, layout, config);
+                
+                // Add click event listener
+                plotDiv.on('plotly_click', function(data) {
+                    handlePlotClick(sourceName, data);
+                });
+            });
+        }
+        
+        function handlePlotClick(sourceName, data) {
+            if (!data.points || data.points.length === 0) return;
+            
+            const point = data.points[0];
+            const clickedChannel = Math.round(point.x);
+            
+            // Find the intensity at this channel
+            const spectrumData = spectraData[sourceName];
+            const channelIndex = spectrumData.channels.findIndex(ch => ch === clickedChannel);
+            if (channelIndex === -1) return;
+            
+            const intensity = spectrumData.spectrum[channelIndex];
+            
+            // Initialize selected peaks for this source if needed
+            if (!(sourceName in selectedPeaks)) {
+                selectedPeaks[sourceName] = [];
+            }
+            
+            // Check if click is near an existing peak (within 10 channels)
+            const existingPeakIndex = selectedPeaks[sourceName].findIndex(
+                peak => Math.abs(peak.channel - clickedChannel) <= 10
+            );
+            
+            if (existingPeakIndex !== -1) {
+                // Remove existing peak
+                selectedPeaks[sourceName].splice(existingPeakIndex, 1);
+            } else {
+                // Add new peak
+                const expectedCount = sources[sourceName].expected_energies.length;
+                if (selectedPeaks[sourceName].length < expectedCount) {
+                    selectedPeaks[sourceName].push({
+                        channel: clickedChannel,
+                        intensity: intensity
+                    });
+                } else {
+                    showAlert(`${sourceName} expects only ${expectedCount} peak(s). Remove existing peaks first.`, 'warning');
+                    return;
+                }
+            }
+            
+            plotSpectra();
+            updatePeakInfo();
+        }
+        
+        function updatePeakInfo() {
+            const peakInfoDiv = document.getElementById('peakInfo');
+            let infoText = `Detector ${currentDetectorId || 'N/A'}\n`;
+            infoText += '====================\n\n';
+            
+            let totalPeaks = 0;
+            let totalExpected = 0;
+            
+            Object.keys(sources).forEach(sourceName => {
+                const expectedEnergies = sources[sourceName].expected_energies;
+                totalExpected += expectedEnergies.length;
+                
+                infoText += `${sourceName}:\n`;
+                infoText += `Expected: [${expectedEnergies.join(', ')}]\n`;
+                
+                if (selectedPeaks[sourceName] && selectedPeaks[sourceName].length > 0) {
+                    totalPeaks += selectedPeaks[sourceName].length;
+                    infoText += 'Selected peaks:\n';
+                    selectedPeaks[sourceName].forEach((peak, i) => {
+                        infoText += `  Peak ${i + 1}: Channel ${peak.channel}\n`;
+                    });
+                } else {
+                    infoText += 'No peaks selected\n';
+                }
+                
+                infoText += '\n';
+            });
+            
+            infoText += `Total: ${totalPeaks}/${totalExpected} peaks selected\n\n`;
+            
+            if (totalPeaks >= 2) {
+                infoText += 'Ready for calibration!\n';
+            } else {
+                infoText += 'Need at least 2 peaks for calibration\n';
+            }
+            
+            peakInfoDiv.textContent = infoText;
+        }
+        
+        function clearSelections() {
+            selectedPeaks = {};
+            plotSpectra();
+            updatePeakInfo();
+        }
+        
+        async function applyCalibration() {
+            if (Object.keys(selectedPeaks).length === 0) {
+                showAlert('No peaks selected', 'warning');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/apply_calibration', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        detector_id: currentDetectorId,
+                        selected_peaks: selectedPeaks
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    let message = `Calibration applied for Detector ${currentDetectorId}:\n`;
+                    message += `Slope: ${result.slope.toFixed(6)} MeV/channel\n`;
+                    message += `Intercept: ${result.intercept.toFixed(6)} MeV\n`;
+                    message += `R²: ${result.r2.toFixed(4)}\n`;
+                    if (result.cv_rmse) {
+                        message += `CV RMSE: ${result.cv_rmse.toFixed(6)} MeV`;
+                    }
+                    
+                    showAlert(message, 'success');
+                    nextDetector();
+                } else {
+                    showAlert(result.error, 'danger');
+                }
+            } catch (error) {
+                showAlert(`Calibration failed: ${error.message}`, 'danger');
+            }
+        }
+        
+        function previousDetector() {
+            if (currentDetectorIdx > 0) {
+                currentDetectorIdx--;
+                loadCurrentDetector();
+            }
+        }
+        
+        function nextDetector() {
+            if (currentDetectorIdx < failedDetectors.length - 1) {
+                currentDetectorIdx++;
+                loadCurrentDetector();
+            } else {
+                showAlert('All detectors have been processed!', 'info');
+            }
+        }
+        
+        function skipDetector() {
+            nextDetector();
+        }
+        
+        async function exportResults() {
+            try {
+                const response = await fetch('/export_results');
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = 'calibration_results.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    
+                    showAlert('Results exported successfully!', 'success');
+                } else {
+                    const result = await response.json();
+                    showAlert(result.error, 'danger');
+                }
+            } catch (error) {
+                showAlert(`Export failed: ${error.message}`, 'danger');
+            }
+        }
+        
+        function updateProgressText() {
+            const progressText = document.getElementById('progressText');
+            if (failedDetectors.length > 0) {
+                progressText.textContent = `Found ${failedDetectors.length} detectors needing correction`;
+            } else {
+                progressText.textContent = 'Load calibration results to start';
+            }
+        }
+        
+        function updateDetectorInfo() {
+            const detectorInfo = document.getElementById('detectorInfo');
+            if (failedDetectors.length > 0) {
+                detectorInfo.textContent = `Detector ${currentDetectorId} (${currentDetectorIdx + 1}/${failedDetectors.length})`;
+            } else {
+                detectorInfo.textContent = '';
+            }
+        }
+        
+        function updateNavigationState() {
+            const prevBtn = document.getElementById('prevBtn');
+            const nextBtn = document.getElementById('nextBtn');
+            const skipBtn = document.getElementById('skipBtn');
+            const applyBtn = document.getElementById('applyBtn');
+            
+            const hasDetectors = failedDetectors.length > 0;
+            
+            prevBtn.disabled = !hasDetectors || currentDetectorIdx === 0;
+            nextBtn.disabled = !hasDetectors || currentDetectorIdx >= failedDetectors.length - 1;
+            skipBtn.disabled = !hasDetectors;
+            applyBtn.disabled = !hasDetectors;
+        }
+    </script>
+</body>
+</html>
