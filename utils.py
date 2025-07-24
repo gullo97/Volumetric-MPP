@@ -34,7 +34,10 @@ def plot_volumetric_persistence_barcode(peaks_info, xlabel="Channel", ylabel="Pe
                        lw=COLORS['linewidths'][0], alpha=COLORS['alphas'][0])
             plt.scatter(cand['peak_index'], cand['persistence'], color=COLORS['default'],
                          s=60, edgecolor='k', zorder=3)
-    plt.xlim(0,1000)
+    # dynamically set x-axis limit based on max detected peak index
+    if peaks_info:
+        max_idx = max(cand['peak_index'] for cand in peaks_info) + 50
+        plt.xlim(0, max_idx)
     # plt.ylim(0, max(cand['persistence'] for cand in peaks_info) * 1.1)
     plt.xlabel(xlabel, fontsize=FONTSIZE["label"])
     plt.ylabel(ylabel, fontsize=FONTSIZE["label"])
