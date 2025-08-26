@@ -174,8 +174,8 @@ If you use this code in your research, please cite:
   title={A Multi-Parameter Persistence Algorithm for the Automatic Energy Calibration of Scintillating Radiation Sensors},
   author={Ferranti, G. and others},
   year={2025},
-  journal={Preprints},
-  doi={10.20944/preprints202506.0487.v1}
+  journal={Sensors, 25, 4579},
+  doi={https://doi.org/10.3390/s25154579}
 }
 ```
 
